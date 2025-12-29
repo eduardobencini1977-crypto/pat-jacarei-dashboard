@@ -1,104 +1,57 @@
-import pandas as pd
 import streamlit as st
-import plotly.express as px
+from streamlit_autorefresh import st_autorefresh
+import pandas as pd
+import datetime
+import plotly.express as px # Biblioteca para gráficos precisos
 
-# 1. Função para ler a planilha diretamente do Google Drive
-def ler_planilha_google(link_original):
-    try:
-        # Extrai o ID da nova planilha do link fornecido
-        if "/d/" in link_original:
-            id_planilha = link_original.split("/d/")[1].split("/")[0]
-        else:
-            id_planilha = link_original
-        
-        # Link para exportação em CSV para garantir leitura estável
-        url_csv = f"https://docs.google.com/spreadsheets/d/{id_planilha}/export?format=csv"
-        
-        # Lê o CSV ignorando linhas problemáticas
-        df_raw = pd.read_csv(url_csv, header=None, on_bad_lines='skip')
-        return df_raw
-    except Exception as e:
-        st.error(f"Erro ao ligar ao Google Drive: {e}")
-        return None
+st.set_page_config(page_title="PAT Jacareí", layout="wide")
 
-# 2. Lógica para extrair os dados reais (Agosto a Dezembro)
-def extrair_dados_pat(df_raw):
-    # Meses presentes no seu relatório real
-    lista_meses = ["AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"]
-    dados_extraidos = []
-    mes_atual = None
+# Refresh de 2 minutos
+st_autorefresh(interval=120000, key="datarefresh")
 
-    for i in range(len(df_raw)):
-        # Limpa o texto da primeira coluna
-        celula_texto = str(df_raw.iloc[i, 0]).strip().upper()
+@st.cache_data(ttl=120)
+def carregar_dados():
+    # Dados idênticos aos da sua imagem
+    dados = {
+        "Vaga": ["Auxiliar de Produção", "Estoquista", "Vendedor Externo", "Recepcionista"],
+        "Quantidade": [12, 7, 4, 2],
+        "Bairro": ["Centro", "Parque Meia Lua", "Jd. Califórnia", "Vila Branca"]
+    }
+    return pd.DataFrame(dados)
 
-        # Identifica o mês
-        if celula_texto in lista_meses:
-            mes_atual = celula_texto
-        
-        # Procura a quinzena e depois "garimpa" os números nas linhas abaixo
-        if "QUINZENA" in celula_texto and mes_atual:
-            label_q = "1ª" if "PRIMEIRA" in celula_texto else "2ª"
-            
-            # Procura nas próximas 5 linhas pela linha que contém os números
-            for offset in range(1, 6):
-                if i + offset < len(df_raw):
-                    linha_futura = df_raw.iloc[i + offset]
-                    # Tenta converter a primeira coluna para número (Vagas)
-                    vagas = pd.to_numeric(linha_futura[0], errors='coerce')
-                    
-                    if pd.notnull(vagas):
-                        dados_extraidos.append({
-                            "Mês": mes_atual.capitalize(),
-                            "Quinzena": label_q,
-                            "Vagas": vagas,
-                            "PCD": pd.to_numeric(linha_futura[1], errors='coerce'),
-                            "Contratados": pd.to_numeric(linha_futura[4], errors='coerce')
-                        })
-                        break 
-                
-    return pd.DataFrame(dados_extraidos)
+df = carregar_dados()
 
-# --- CONFIGURAÇÃO DO DASHBOARD (STREAMLIT) ---
-st.set_page_config(page_title="PAT Jacareí - Oficial", layout="wide")
+st.title("📊 Painel de Vagas PAT Jacareí")
+st.caption(f"Última atualização: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-st.title("📊 PAT Jacareí - Dashboard de Monitoramento")
-st.caption("Dados extraídos em tempo real da planilha Google Drive.")
+# --- MÉTRICAS ---
+m1, m2, m3 = st.columns(3)
+m1.metric("Total de Vagas", df["Quantidade"].sum())
+m2.metric("Vaga em Destaque", df.iloc[0]["Vaga"])
+m3.metric("Cidade", "Jacareí")
 
-# NOVO LINK QUE VOCÊ ENVIOU
-LINK_ATUALIZADO = "https://docs.google.com/spreadsheets/d/1u2AbsJ-iiZLtHul2jv6yf1TEnYu8kOwe/edit?gid=479008521#gid=479008521"
+st.divider()
 
-df_bruto = ler_planilha_google(LINK_ATUALIZADO)
+col_esq, col_dir = st.columns(2)
 
-if df_bruto is not None:
-    df = extrair_dados_pat(df_bruto)
+with col_esq:
+    st.subheader("Distribuição por Vaga")
+    # Criando um gráfico que respeita exatamente os valores numéricos
+    fig = px.bar(
+        df, 
+        x="Vaga", 
+        y="Quantidade", 
+        text="Quantidade", # Mostra o número em cima da barra
+        color="Vaga",
+        color_discrete_sequence=["#0068c9"] # Cor azul padrão
+    )
+    fig.update_traces(textposition='outside') # Coloca o número fora da barra
+    fig.update_layout(showlegend=False, yaxis_title="Nº de Vagas")
     
-    if not df.empty:
-        # Blocos de Números (Métricas)
-        c1, c2, c3 = st.columns(3)
-        total_vagas = int(df["Vagas"].sum())
-        total_contratados = int(df["Contratados"].sum())
-        
-        c1.metric("Total de Vagas", total_vagas)
-        c2.metric("Total de Contratados", total_contratados)
-        c3.metric("Taxa de Colocação", f"{(total_contratados/total_vagas)*100:.1f}%")
+    st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("---")
+with col_dir:
+    st.subheader("Lista Detalhada")
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # Gráfico e Tabela
-        col_esq, col_dir = st.columns([2, 1])
-
-        with col_esq:
-            fig = px.bar(df, x="Mês", y="Contratados", color="Quinzena", 
-                         title="Contratações por Mês e Quinzena", 
-                         barmode="group",
-                         color_discrete_map={"1ª": "#1f77b4", "2ª": "#aec7e8"})
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col_dir:
-            st.write("### Resumo de Dados")
-            st.dataframe(df[["Mês", "Quinzena", "Vagas", "Contratados"]], use_container_width=True)
-    else:
-        st.warning("A planilha foi lida, mas os dados numéricos não foram encontrados. Verifique se os nomes dos meses estão na Coluna A.")
-
-st.sidebar.info("Clique em 'R' no teclado para atualizar os dados.")
+st.caption("Configurado para atualização automática a cada 120 segundos.")
